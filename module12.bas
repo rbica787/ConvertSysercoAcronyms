@@ -1119,7 +1119,7 @@ Private Sub BuildSysercoMappings( _
     AddCanonicalMapping nameToAcronym, acronymToName, "Hot Aisle Temperature", "HAT"
     AddCanonicalMapping nameToAcronym, acronymToName, "Humidity", "H"
 
-    AddCanonicalMapping nameToAcronym, acronymToName, "Industrial", "I"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Industrial", "IND"
     AddCanonicalMapping nameToAcronym, acronymToName, "Industrial Water", "IW"
     AddCanonicalMapping nameToAcronym, acronymToName, "Industrial Water Pump", "IWP"
     AddCanonicalMapping nameToAcronym, acronymToName, "Isolation", "ISO"
@@ -1186,12 +1186,13 @@ Private Sub BuildSysercoMappings( _
     AddCanonicalMapping nameToAcronym, acronymToName, "Standard", "STD"
     AddCanonicalMapping nameToAcronym, acronymToName, "Start", "STRT"
     AddCanonicalMapping nameToAcronym, acronymToName, "Start/Stop Command", "SS"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Start/Stop", "S/S"
     AddCanonicalMapping nameToAcronym, acronymToName, "Status", "STS"
     AddCanonicalMapping nameToAcronym, acronymToName, "Supply Air Temperature", "SAT"
     AddCanonicalMapping nameToAcronym, acronymToName, "Supply Fan", "SF"
     AddCanonicalMapping nameToAcronym, acronymToName, "Switch", "SW"
 
-    AddCanonicalMapping nameToAcronym, acronymToName, "Temperature", "T"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Temperature", "TEMP"
     AddCanonicalMapping nameToAcronym, acronymToName, "Unoccupied", "UNOCC"
     AddCanonicalMapping nameToAcronym, acronymToName, "Valve", "VLV"
     AddCanonicalMapping nameToAcronym, acronymToName, "Vibration", "VIBRATION"

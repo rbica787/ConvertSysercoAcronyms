@@ -12,7 +12,7 @@ Public Sub ConvertSysercoAcronyms()
 
     Do
         menuChoice = Application.InputBox( _
-            prompt:= _
+            Prompt:= _
                 "Choose an option:" & vbCrLf & vbCrLf & _
                 "1 = Convert ACRONYMS to full NAMES" & vbCrLf & _
                 "2 = Convert full NAMES to ACRONYMS" & vbCrLf & _
@@ -25,11 +25,13 @@ Public Sub ConvertSysercoAcronyms()
         If UserCancelledInputBox(menuChoice) Then Exit Sub
 
         If Not IsNumeric(menuChoice) Then
+
             MsgBox "Enter 1, 2, 3, or 4.", _
                    vbExclamation, _
                    "Invalid Selection"
 
         Else
+
             Select Case CLng(menuChoice)
 
                 Case 1
@@ -52,7 +54,9 @@ Public Sub ConvertSysercoAcronyms()
                            "Invalid Selection"
 
             End Select
+
         End If
+
     Loop
 
     ProcessSelectedCells conversionMode
@@ -83,26 +87,32 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
     Dim skippedFormulaCells As Long
 
     If TypeName(Selection) <> "Range" Then
+
         MsgBox "Select the Excel cells you want to search, then run the macro again.", _
                vbExclamation, _
                "No Cells Selected"
+
         Exit Sub
+
     End If
 
     If Selection.Cells.CountLarge = 0 Then
+
         MsgBox "Select at least one cell before running the macro.", _
                vbExclamation, _
                "No Cells Selected"
+
         Exit Sub
+
     End If
 
     Set nameToAcronym = CreateObject("Scripting.Dictionary")
     Set acronymToNames = CreateObject("Scripting.Dictionary")
     Set ambiguityChoices = CreateObject("Scripting.Dictionary")
 
-    nameToAcronym.compareMode = vbTextCompare
-    acronymToNames.compareMode = vbTextCompare
-    ambiguityChoices.compareMode = vbTextCompare
+    nameToAcronym.CompareMode = vbTextCompare
+    acronymToNames.CompareMode = vbTextCompare
+    ambiguityChoices.CompareMode = vbTextCompare
 
     BuildSysercoMappings nameToAcronym, acronymToNames
     LoadCustomMappings nameToAcronym, acronymToNames
@@ -124,7 +134,7 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
 
             skippedFormulaCells = skippedFormulaCells + 1
 
-        ElseIf Not IsError(cell.value) Then
+        ElseIf Not IsError(cell.Value) Then
 
             If Len(CStr(cell.Value2)) > 0 Then
 
@@ -139,6 +149,10 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
                         acronymToNames, _
                         ambiguityChoices)
 
+                    'Replace all underscores with spaces,
+                    'clean repeated spaces, and capitalize everything.
+                    revisedText = NormalizeNameOutput(revisedText)
+
                 Else
 
                     revisedText = ConvertNamesInText( _
@@ -146,14 +160,19 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
                         searchKeys, _
                         nameToAcronym)
 
+                    'Replace spaces with underscores,
+                    'clean repeated underscores, and capitalize everything.
+                    revisedText = NormalizeAcronymOutput(revisedText)
+
                 End If
 
                 If revisedText <> originalText Then
-                    cell.value = revisedText
+                    cell.Value = revisedText
                     changedCells = changedCells + 1
                 End If
 
             End If
+
         End If
 
     Next cell
@@ -227,6 +246,92 @@ End Sub
 
 
 '============================================================
+' FORMAT ACRONYM-TO-NAME OUTPUT
+'
+' Example:
+'   OUTSIDE_DEW POINT
+'
+' Becomes:
+'   OUTSIDE DEW POINT
+'============================================================
+Private Function NormalizeNameOutput(ByVal sourceText As String) As String
+
+    Dim regex As Object
+    Dim resultText As String
+
+    resultText = sourceText
+
+    'Every underscore becomes a space.
+    resultText = Replace(resultText, "_", " ")
+
+    'Convert tabs and line breaks to spaces.
+    resultText = Replace(resultText, vbTab, " ")
+    resultText = Replace(resultText, vbCr, " ")
+    resultText = Replace(resultText, vbLf, " ")
+
+    'Reduce all repeated whitespace to one space.
+    Set regex = CreateObject("VBScript.RegExp")
+
+    regex.Global = True
+    regex.IgnoreCase = False
+    regex.Pattern = "\s+"
+
+    resultText = regex.Replace(resultText, " ")
+
+    'Remove leading and trailing spaces.
+    resultText = Trim$(resultText)
+
+    'Final result is always uppercase.
+    NormalizeNameOutput = UCase$(resultText)
+
+End Function
+
+
+'============================================================
+' FORMAT NAME-TO-ACRONYM OUTPUT
+'
+' Example:
+'   SAT ALM
+'
+' Becomes:
+'   SAT_ALM
+'============================================================
+Private Function NormalizeAcronymOutput(ByVal sourceText As String) As String
+
+    Dim regex As Object
+    Dim resultText As String
+
+    resultText = sourceText
+
+    'Convert all whitespace runs to one underscore.
+    Set regex = CreateObject("VBScript.RegExp")
+
+    regex.Global = True
+    regex.IgnoreCase = False
+    regex.Pattern = "\s+"
+
+    resultText = regex.Replace(resultText, "_")
+
+    'Reduce repeated underscores to one underscore.
+    regex.Pattern = "_+"
+    resultText = regex.Replace(resultText, "_")
+
+    'Remove leading and trailing underscores.
+    Do While Left$(resultText, 1) = "_"
+        resultText = Mid$(resultText, 2)
+    Loop
+
+    Do While Right$(resultText, 1) = "_"
+        resultText = Left$(resultText, Len(resultText) - 1)
+    Loop
+
+    'Final result is always uppercase.
+    NormalizeAcronymOutput = UCase$(resultText)
+
+End Function
+
+
+'============================================================
 ' ADD A NEW CUSTOM NAME / ACRONYM CONVERSION
 '============================================================
 Private Sub AddNewSysercoConversion()
@@ -250,7 +355,7 @@ Private Sub AddNewSysercoConversion()
     Dim i As Long
 
     fullNameInput = Application.InputBox( _
-        prompt:= _
+        Prompt:= _
             "Enter the full NAME for the new conversion." & vbCrLf & vbCrLf & _
             "Example: Discharge Air Temperature", _
         Title:="Add New Syserco Name", _
@@ -261,16 +366,19 @@ Private Sub AddNewSysercoConversion()
     fullName = Trim$(CStr(fullNameInput))
 
     If Len(fullName) = 0 Then
+
         MsgBox "The NAME cannot be blank.", _
                vbExclamation, _
                "Name Required"
+
         Exit Sub
+
     End If
 
     acronymInput = Application.InputBox( _
-        prompt:= _
+        Prompt:= _
             "Enter the ACRONYM that corresponds to:" & vbCrLf & vbCrLf & _
-            fullName & vbCrLf & vbCrLf & _
+            UCase$(fullName) & vbCrLf & vbCrLf & _
             "Example: DAT", _
         Title:="Add New Syserco Acronym", _
         Type:=2)
@@ -280,24 +388,31 @@ Private Sub AddNewSysercoConversion()
     acronym = Trim$(CStr(acronymInput))
 
     If Len(acronym) = 0 Then
+
         MsgBox "The ACRONYM cannot be blank.", _
                vbExclamation, _
                "Acronym Required"
+
         Exit Sub
+
     End If
+
+    'Store custom names and acronyms in uppercase.
+    fullName = UCase$(fullName)
+    acronym = UCase$(acronym)
+
+    'Spaces are not stored inside an acronym.
+    acronym = NormalizeAcronymOutput(acronym)
 
     Set nameToAcronym = CreateObject("Scripting.Dictionary")
     Set acronymToNames = CreateObject("Scripting.Dictionary")
 
-    nameToAcronym.compareMode = vbTextCompare
-    acronymToNames.compareMode = vbTextCompare
+    nameToAcronym.CompareMode = vbTextCompare
+    acronymToNames.CompareMode = vbTextCompare
 
     BuildSysercoMappings nameToAcronym, acronymToNames
     LoadCustomMappings nameToAcronym, acronymToNames
 
-    '--------------------------------------------------------
-    ' Check whether the name already exists.
-    '--------------------------------------------------------
     If nameToAcronym.Exists(fullName) Then
 
         If StrComp( _
@@ -316,7 +431,7 @@ Private Sub AddNewSysercoConversion()
             MsgBox _
                 "The NAME """ & fullName & """ already exists with the acronym:" & _
                 vbCrLf & vbCrLf & _
-                CStr(nameToAcronym(fullName)) & vbCrLf & vbCrLf & _
+                UCase$(CStr(nameToAcronym(fullName))) & vbCrLf & vbCrLf & _
                 "A name can only be assigned to one acronym.", _
                 vbExclamation, _
                 "Name Already Exists"
@@ -324,12 +439,9 @@ Private Sub AddNewSysercoConversion()
         End If
 
         Exit Sub
+
     End If
 
-    '--------------------------------------------------------
-    ' Warn when the acronym already has another meaning.
-    ' Multiple meanings are allowed.
-    '--------------------------------------------------------
     If acronymToNames.Exists(acronym) Then
 
         Set possibleNames = acronymToNames(acronym)
@@ -341,7 +453,7 @@ Private Sub AddNewSysercoConversion()
             End If
 
             existingNames = existingNames & _
-                            "• " & CStr(possibleNames(i))
+                            "• " & UCase$(CStr(possibleNames(i)))
 
         Next i
 
@@ -375,8 +487,8 @@ Private Sub AddNewSysercoConversion()
 
     If nextRow < 2 Then nextRow = 2
 
-    customSheet.Cells(nextRow, 1).value = fullName
-    customSheet.Cells(nextRow, 2).value = acronym
+    customSheet.Cells(nextRow, 1).Value = fullName
+    customSheet.Cells(nextRow, 2).Value = acronym
 
     customSheet.Columns("A:B").AutoFit
     customSheet.Visible = xlSheetHidden
@@ -409,8 +521,8 @@ Private Function GetOrCreateCustomMappingSheet() As Worksheet
 
         ws.Name = CUSTOM_SHEET_NAME
 
-        ws.Cells(1, 1).value = "NAME"
-        ws.Cells(1, 2).value = "ACRONYM"
+        ws.Cells(1, 1).Value = "NAME"
+        ws.Cells(1, 2).Value = "ACRONYM"
 
         ws.Range("A1:B1").Font.Bold = True
         ws.Columns("A:B").AutoFit
@@ -451,13 +563,18 @@ Private Sub LoadCustomMappings( _
         fullName = Trim$(CStr(ws.Cells(rowNumber, 1).Value2))
         acronym = Trim$(CStr(ws.Cells(rowNumber, 2).Value2))
 
+        fullName = UCase$(fullName)
+        acronym = UCase$(acronym)
+
         If Len(fullName) > 0 And Len(acronym) > 0 Then
 
             If Not nameToAcronym.Exists(fullName) Then
+
                 AddMapping nameToAcronym, _
                            acronymToNames, _
                            fullName, _
                            acronym
+
             End If
 
         End If
@@ -590,15 +707,23 @@ Private Function ResolveAmbiguousAcronym( _
     Dim selectedNumber As Long
 
     If ambiguityChoices.Exists(acronym) Then
-        ResolveAmbiguousAcronym = CStr(ambiguityChoices(acronym))
+
+        ResolveAmbiguousAcronym = _
+            CStr(ambiguityChoices(acronym))
+
         Exit Function
+
     End If
 
-    prompt = "The acronym """ & acronym & _
+    prompt = "The acronym """ & UCase$(acronym) & _
              """ has more than one possible meaning:" & vbCrLf & vbCrLf
 
     For i = 1 To possibleNames.Count
-        prompt = prompt & i & " - " & CStr(possibleNames(i)) & vbCrLf
+
+        prompt = prompt & _
+                 i & " - " & _
+                 UCase$(CStr(possibleNames(i))) & vbCrLf
+
     Next i
 
     prompt = prompt & vbCrLf & _
@@ -609,13 +734,15 @@ Private Function ResolveAmbiguousAcronym( _
 
     Do
         response = Application.InputBox( _
-            prompt:=prompt, _
-            Title:="Choose Meaning for " & acronym, _
+            Prompt:=prompt, _
+            Title:="Choose Meaning for " & UCase$(acronym), _
             Type:=1)
 
         If UserCancelledInputBox(response) Then
+
             ResolveAmbiguousAcronym = vbNullString
             Exit Function
+
         End If
 
         If IsNumeric(response) Then
@@ -635,6 +762,7 @@ Private Function ResolveAmbiguousAcronym( _
                 Exit Function
 
             End If
+
         End If
 
         MsgBox "Enter a number from 1 through " & _
@@ -662,7 +790,7 @@ Private Function ContainsWholeTerm( _
 
     regex.Global = False
     regex.IgnoreCase = True
-    regex.Multiline = True
+    regex.MultiLine = True
 
     searchPattern = BuildSearchPattern( _
         searchTerm, _
@@ -693,7 +821,7 @@ Private Function ReplaceWholeTerm( _
 
     regex.Global = True
     regex.IgnoreCase = True
-    regex.Multiline = True
+    regex.MultiLine = True
 
     searchPattern = BuildSearchPattern( _
         searchTerm, _
@@ -772,7 +900,7 @@ Private Function GetSortedDictionaryKeys( _
     Dim j As Long
     Dim temporaryValue As Variant
 
-    keys = dictionary.keys
+    keys = dictionary.Keys
 
     For i = LBound(keys) To UBound(keys) - 1
 
@@ -787,6 +915,7 @@ Private Function GetSortedDictionaryKeys( _
             End If
 
         Next j
+
     Next i
 
     GetSortedDictionaryKeys = keys
@@ -897,7 +1026,7 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Door Contact", "DOOR"
     AddMapping nameToAcronym, acronymToNames, "Economizer", "ECON"
     AddMapping nameToAcronym, acronymToNames, "Enable", "ENA"
-    AddMapping nameToAcronym, acronymToNames, "Energy", "kWh"
+    AddMapping nameToAcronym, acronymToNames, "Energy", "KWH"
 
     AddMapping nameToAcronym, acronymToNames, "Enthalpy", "ENTH"
     AddMapping nameToAcronym, acronymToNames, "Exhaust", "EXH"
@@ -944,7 +1073,7 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Open", "OPEN"
     AddMapping nameToAcronym, acronymToNames, "Override", "OVRD"
     AddMapping nameToAcronym, acronymToNames, "Position", "POS"
-    AddMapping nameToAcronym, acronymToNames, "Power", "kW"
+    AddMapping nameToAcronym, acronymToNames, "Power", "KW"
     AddMapping nameToAcronym, acronymToNames, "Pre", "PRE"
     AddMapping nameToAcronym, acronymToNames, "Pressure Switch", "PS"
     AddMapping nameToAcronym, acronymToNames, "Primary", "P"
@@ -1011,4 +1140,3 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Zone", "ZONE"
 
 End Sub
-

@@ -12,7 +12,7 @@ Public Sub ConvertSysercoAcronyms()
 
     Do
         menuChoice = Application.InputBox( _
-            Prompt:= _
+            prompt:= _
                 "Choose an option:" & vbCrLf & vbCrLf & _
                 "1 = Convert ACRONYMS to full NAMES" & vbCrLf & _
                 "2 = Convert full NAMES to ACRONYMS" & vbCrLf & _
@@ -110,9 +110,9 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
     Set acronymToNames = CreateObject("Scripting.Dictionary")
     Set ambiguityChoices = CreateObject("Scripting.Dictionary")
 
-    nameToAcronym.CompareMode = vbTextCompare
-    acronymToNames.CompareMode = vbTextCompare
-    ambiguityChoices.CompareMode = vbTextCompare
+    nameToAcronym.compareMode = vbTextCompare
+    acronymToNames.compareMode = vbTextCompare
+    ambiguityChoices.compareMode = vbTextCompare
 
     BuildSysercoMappings nameToAcronym, acronymToNames
     LoadCustomMappings nameToAcronym, acronymToNames
@@ -134,7 +134,7 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
 
             skippedFormulaCells = skippedFormulaCells + 1
 
-        ElseIf Not IsError(cell.Value) Then
+        ElseIf Not IsError(cell.value) Then
 
             If Len(CStr(cell.Value2)) > 0 Then
 
@@ -167,7 +167,7 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
                 End If
 
                 If revisedText <> originalText Then
-                    cell.Value = revisedText
+                    cell.value = revisedText
                     changedCells = changedCells + 1
                 End If
 
@@ -355,7 +355,7 @@ Private Sub AddNewSysercoConversion()
     Dim i As Long
 
     fullNameInput = Application.InputBox( _
-        Prompt:= _
+        prompt:= _
             "Enter the full NAME for the new conversion." & vbCrLf & vbCrLf & _
             "Example: Discharge Air Temperature", _
         Title:="Add New Syserco Name", _
@@ -376,7 +376,7 @@ Private Sub AddNewSysercoConversion()
     End If
 
     acronymInput = Application.InputBox( _
-        Prompt:= _
+        prompt:= _
             "Enter the ACRONYM that corresponds to:" & vbCrLf & vbCrLf & _
             UCase$(fullName) & vbCrLf & vbCrLf & _
             "Example: DAT", _
@@ -407,8 +407,8 @@ Private Sub AddNewSysercoConversion()
     Set nameToAcronym = CreateObject("Scripting.Dictionary")
     Set acronymToNames = CreateObject("Scripting.Dictionary")
 
-    nameToAcronym.CompareMode = vbTextCompare
-    acronymToNames.CompareMode = vbTextCompare
+    nameToAcronym.compareMode = vbTextCompare
+    acronymToNames.compareMode = vbTextCompare
 
     BuildSysercoMappings nameToAcronym, acronymToNames
     LoadCustomMappings nameToAcronym, acronymToNames
@@ -487,8 +487,8 @@ Private Sub AddNewSysercoConversion()
 
     If nextRow < 2 Then nextRow = 2
 
-    customSheet.Cells(nextRow, 1).Value = fullName
-    customSheet.Cells(nextRow, 2).Value = acronym
+    customSheet.Cells(nextRow, 1).value = fullName
+    customSheet.Cells(nextRow, 2).value = acronym
 
     customSheet.Columns("A:B").AutoFit
     customSheet.Visible = xlSheetHidden
@@ -521,8 +521,8 @@ Private Function GetOrCreateCustomMappingSheet() As Worksheet
 
         ws.Name = CUSTOM_SHEET_NAME
 
-        ws.Cells(1, 1).Value = "NAME"
-        ws.Cells(1, 2).Value = "ACRONYM"
+        ws.Cells(1, 1).value = "NAME"
+        ws.Cells(1, 2).value = "ACRONYM"
 
         ws.Range("A1:B1").Font.Bold = True
         ws.Columns("A:B").AutoFit
@@ -734,7 +734,7 @@ Private Function ResolveAmbiguousAcronym( _
 
     Do
         response = Application.InputBox( _
-            Prompt:=prompt, _
+            prompt:=prompt, _
             Title:="Choose Meaning for " & UCase$(acronym), _
             Type:=1)
 
@@ -790,7 +790,7 @@ Private Function ContainsWholeTerm( _
 
     regex.Global = False
     regex.IgnoreCase = True
-    regex.MultiLine = True
+    regex.Multiline = True
 
     searchPattern = BuildSearchPattern( _
         searchTerm, _
@@ -821,7 +821,7 @@ Private Function ReplaceWholeTerm( _
 
     regex.Global = True
     regex.IgnoreCase = True
-    regex.MultiLine = True
+    regex.Multiline = True
 
     searchPattern = BuildSearchPattern( _
         searchTerm, _
@@ -900,7 +900,7 @@ Private Function GetSortedDictionaryKeys( _
     Dim j As Long
     Dim temporaryValue As Variant
 
-    keys = dictionary.Keys
+    keys = dictionary.keys
 
     For i = LBound(keys) To UBound(keys) - 1
 
@@ -994,8 +994,8 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Airflow Measuring Station", "AFMS"
     AddMapping nameToAcronym, acronymToNames, "Alarm", "ALM"
     AddMapping nameToAcronym, acronymToNames, "Bias", "BIAS"
-    AddMapping nameToAcronym, acronymToNames, "Boiler", "B"
-    AddMapping nameToAcronym, acronymToNames, "Building", "B"
+    AddMapping nameToAcronym, acronymToNames, "Boiler", "BLR"
+    AddMapping nameToAcronym, acronymToNames, "Building", "BLDG"
     AddMapping nameToAcronym, acronymToNames, "Building Differential Pressure", "BDP"
     AddMapping nameToAcronym, acronymToNames, "Bypass", "BYP"
     AddMapping nameToAcronym, acronymToNames, "Chilled Water", "CHW"
@@ -1008,7 +1008,7 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Command", "CMD"
     AddMapping nameToAcronym, acronymToNames, "Condenser Water", "CW"
     AddMapping nameToAcronym, acronymToNames, "Condenser Water Pump", "CWP"
-    AddMapping nameToAcronym, acronymToNames, "Cooling (Software Point)", "CLG"
+    AddMapping nameToAcronym, acronymToNames, "Cooling", "CLG"
     AddMapping nameToAcronym, acronymToNames, "Cooling Tower", "CT"
     AddMapping nameToAcronym, acronymToNames, "Cooling Tower Pump", "CTP"
     AddMapping nameToAcronym, acronymToNames, "Close", "CLOSE"
@@ -1064,7 +1064,7 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Occupied", "OCC"
     AddMapping nameToAcronym, acronymToNames, "Offset", "OFFSET"
     AddMapping nameToAcronym, acronymToNames, "Optimum", "OPT"
-    AddMapping nameToAcronym, acronymToNames, "Outside Air", "OSA"
+    AddMapping nameToAcronym, acronymToNames, "Outside Air", "OA"
     AddMapping nameToAcronym, acronymToNames, "Outside Air Relative Humidity", "OA_RH"
     AddMapping nameToAcronym, acronymToNames, "Outside Air Temperature", "OAT"
 
@@ -1076,7 +1076,7 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Power", "KW"
     AddMapping nameToAcronym, acronymToNames, "Pre", "PRE"
     AddMapping nameToAcronym, acronymToNames, "Pressure Switch", "PS"
-    AddMapping nameToAcronym, acronymToNames, "Primary", "P"
+    AddMapping nameToAcronym, acronymToNames, "Primary", "PRMRY"
     AddMapping nameToAcronym, acronymToNames, "Primary Chilled Water Pump", "PCHWP"
     AddMapping nameToAcronym, acronymToNames, "Primary Chilled Water Return Temp", "PCHWRT"
     AddMapping nameToAcronym, acronymToNames, "Primary Chilled Water Supply Temp", "PCHWST"
@@ -1086,7 +1086,7 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Process", "P"
     AddMapping nameToAcronym, acronymToNames, "Process Water", "PW"
     AddMapping nameToAcronym, acronymToNames, "Process Water Pump", "PWP"
-    AddMapping nameToAcronym, acronymToNames, "Pump", "P"
+    AddMapping nameToAcronym, acronymToNames, "Pump", "PMP"
     AddMapping nameToAcronym, acronymToNames, "Recirculation", "RECIR"
     AddMapping nameToAcronym, acronymToNames, "Relative Humidity", "RH"
     AddMapping nameToAcronym, acronymToNames, "Relative Humidity Outside", "OA_RH"
@@ -1132,7 +1132,7 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Valve", "VLV"
     AddMapping nameToAcronym, acronymToNames, "Vibration", "VIBRATION"
     AddMapping nameToAcronym, acronymToNames, "Voltage", "VOLTS"
-    AddMapping nameToAcronym, acronymToNames, "Water", "W"
+    AddMapping nameToAcronym, acronymToNames, "Water", "WTR"
     AddMapping nameToAcronym, acronymToNames, "Water Flow", "GPM"
     AddMapping nameToAcronym, acronymToNames, "Water Used", "GAL"
     AddMapping nameToAcronym, acronymToNames, "Wet Bulb Outside Temp", "OA_WB"
@@ -1140,3 +1140,4 @@ Private Sub BuildSysercoMappings( _
     AddMapping nameToAcronym, acronymToNames, "Zone", "ZONE"
 
 End Sub
+

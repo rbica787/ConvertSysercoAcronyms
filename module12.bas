@@ -74,16 +74,17 @@ End Sub
 Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
 
     Dim nameToAcronym As Object
-    Dim acronymToNames As Object
-    Dim ambiguityChoices As Object
+    Dim acronymToName As Object
 
     Dim searchKeys As Variant
     Dim cell As Range
 
     Dim originalText As String
     Dim revisedText As String
+    Dim foundConversion As Boolean
 
     Dim changedCells As Long
+    Dim matchedCells As Long
     Dim skippedFormulaCells As Long
 
     If TypeName(Selection) <> "Range" Then
@@ -107,18 +108,16 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
     End If
 
     Set nameToAcronym = CreateObject("Scripting.Dictionary")
-    Set acronymToNames = CreateObject("Scripting.Dictionary")
-    Set ambiguityChoices = CreateObject("Scripting.Dictionary")
+    Set acronymToName = CreateObject("Scripting.Dictionary")
 
     nameToAcronym.compareMode = vbTextCompare
-    acronymToNames.compareMode = vbTextCompare
-    ambiguityChoices.compareMode = vbTextCompare
+    acronymToName.compareMode = vbTextCompare
 
-    BuildSysercoMappings nameToAcronym, acronymToNames
-    LoadCustomMappings nameToAcronym, acronymToNames
+    BuildSysercoMappings nameToAcronym, acronymToName
+    LoadCustomMappings nameToAcronym, acronymToName
 
     If conversionMode = 1 Then
-        searchKeys = GetSortedDictionaryKeys(acronymToNames)
+        searchKeys = GetSortedDictionaryKeys(acronymToName)
     Else
         searchKeys = GetSortedDictionaryKeys(nameToAcronym)
     End If
@@ -140,35 +139,46 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
 
                 originalText = CStr(cell.Value2)
                 revisedText = originalText
+                foundConversion = False
 
                 If conversionMode = 1 Then
 
                     revisedText = ConvertAcronymsInText( _
-                        revisedText, _
-                        searchKeys, _
-                        acronymToNames, _
-                        ambiguityChoices)
+                        sourceText:=revisedText, _
+                        sortedAcronyms:=searchKeys, _
+                        acronymToName:=acronymToName, _
+                        foundConversion:=foundConversion)
 
-                    'Replace all underscores with spaces,
-                    'clean repeated spaces, and capitalize everything.
                     revisedText = NormalizeNameOutput(revisedText)
 
                 Else
 
                     revisedText = ConvertNamesInText( _
-                        revisedText, _
-                        searchKeys, _
-                        nameToAcronym)
+                        sourceText:=revisedText, _
+                        sortedNames:=searchKeys, _
+                        nameToAcronym:=nameToAcronym, _
+                        foundConversion:=foundConversion)
 
-                    'Replace spaces with underscores,
-                    'clean repeated underscores, and capitalize everything.
-                    revisedText = NormalizeAcronymOutput(revisedText)
+                    If foundConversion Then
+                        revisedText = NormalizeAcronymOutput(revisedText)
+                    End If
 
                 End If
 
-                If revisedText <> originalText Then
-                    cell.value = revisedText
-                    changedCells = changedCells + 1
+                If foundConversion Then
+
+                    matchedCells = matchedCells + 1
+
+                    If StrComp( _
+                        revisedText, _
+                        originalText, _
+                        vbBinaryCompare) <> 0 Then
+
+                        cell.value = revisedText
+                        changedCells = changedCells + 1
+
+                    End If
+
                 End If
 
             End If
@@ -180,19 +190,21 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
     Application.EnableEvents = True
     Application.ScreenUpdating = True
 
-    If changedCells = 0 Then
+    If matchedCells = 0 Then
 
         If conversionMode = 1 Then
 
-            MsgBox "No recognized Syserco acronyms were found in the selected non-formula cells.", _
-                   vbInformation, _
-                   "No Acronyms Found"
+            MsgBox _
+                "No recognized Syserco acronyms were found in the selected non-formula cells.", _
+                vbInformation, _
+                "No Acronyms Found"
 
         Else
 
-            MsgBox "No recognized Syserco names were found in the selected non-formula cells.", _
-                   vbInformation, _
-                   "No Names Found"
+            MsgBox _
+                "No recognized Syserco names were found in the selected non-formula cells.", _
+                vbInformation, _
+                "No Names Found"
 
         End If
 
@@ -207,6 +219,23 @@ Private Sub ProcessSelectedCells(ByVal conversionMode As Long)
         End If
 
         completionMessage = completionMessage & " updated."
+
+        If matchedCells > changedCells Then
+
+            completionMessage = completionMessage & vbCrLf & _
+                                (matchedCells - changedCells) & _
+                                " additional selected cell"
+
+            If matchedCells - changedCells <> 1 Then
+                completionMessage = completionMessage & "s were"
+            Else
+                completionMessage = completionMessage & " was"
+            End If
+
+            completionMessage = completionMessage & _
+                                " already in the requested format."
+
+        End If
 
         If skippedFormulaCells > 0 Then
 
@@ -237,52 +266,162 @@ ConversionError:
     Application.EnableEvents = True
     Application.ScreenUpdating = True
 
-    MsgBox "The conversion could not be completed." & vbCrLf & vbCrLf & _
-           "Error " & Err.Number & ": " & Err.Description, _
-           vbCritical, _
-           "Conversion Error"
+    MsgBox _
+        "The conversion could not be completed." & vbCrLf & vbCrLf & _
+        "Error " & Err.Number & ": " & Err.Description, _
+        vbCritical, _
+        "Conversion Error"
 
 End Sub
 
 
 '============================================================
-' FORMAT ACRONYM-TO-NAME OUTPUT
+' CONVERT ACRONYMS TO NAMES
 '
-' Example:
-'   OUTSIDE_DEW POINT
+' Each acronym has one canonical output name.
 '
-' Becomes:
-'   OUTSIDE DEW POINT
+' Examples:
+'   EF       -> EXHAUST FAN
+'   RF       -> RETURN FAN
+'   OA_WB    -> OUTSIDE AIR WET BULB TEMPERATURE
+'   WTR_FLOW -> WATER FLOW
 '============================================================
-Private Function NormalizeNameOutput(ByVal sourceText As String) As String
+Private Function ConvertAcronymsInText( _
+    ByVal sourceText As String, _
+    ByVal sortedAcronyms As Variant, _
+    ByVal acronymToName As Object, _
+    ByRef foundConversion As Boolean) As String
 
-    Dim regex As Object
+    Dim i As Long
+    Dim acronym As String
+    Dim replacementName As String
     Dim resultText As String
 
     resultText = sourceText
 
-    'Every underscore becomes a space.
-    resultText = Replace(resultText, "_", " ")
+    For i = LBound(sortedAcronyms) To UBound(sortedAcronyms)
+
+        acronym = CStr(sortedAcronyms(i))
+
+        If ContainsWholeTerm( _
+            sourceText:=resultText, _
+            searchTerm:=acronym, _
+            flexibleNameSeparators:=False) Then
+
+            replacementName = CStr(acronymToName(acronym))
+
+            resultText = ReplaceWholeTerm( _
+                sourceText:=resultText, _
+                searchTerm:=acronym, _
+                replacementText:=replacementName, _
+                flexibleNameSeparators:=False)
+
+            foundConversion = True
+
+        End If
+
+    Next i
+
+    ConvertAcronymsInText = resultText
+
+End Function
+
+
+'============================================================
+' CONVERT NAMES TO ACRONYMS
+'
+' Alternate names may convert to a canonical acronym.
+'
+' Example:
+'   RELIEF FAN -> EF
+'
+' However:
+'   EF -> EXHAUST FAN
+'============================================================
+Private Function ConvertNamesInText( _
+    ByVal sourceText As String, _
+    ByVal sortedNames As Variant, _
+    ByVal nameToAcronym As Object, _
+    ByRef foundConversion As Boolean) As String
+
+    Dim i As Long
+    Dim fullName As String
+    Dim acronym As String
+    Dim resultText As String
+
+    resultText = sourceText
+
+    For i = LBound(sortedNames) To UBound(sortedNames)
+
+        fullName = CStr(sortedNames(i))
+        acronym = CStr(nameToAcronym(fullName))
+
+        If ContainsWholeTerm( _
+            sourceText:=resultText, _
+            searchTerm:=fullName, _
+            flexibleNameSeparators:=True) Then
+
+            resultText = ReplaceWholeTerm( _
+                sourceText:=resultText, _
+                searchTerm:=fullName, _
+                replacementText:=acronym, _
+                flexibleNameSeparators:=True)
+
+            foundConversion = True
+
+        End If
+
+    Next i
+
+    ConvertNamesInText = resultText
+
+End Function
+
+
+'============================================================
+' FORMAT ACRONYM-TO-NAME OUTPUT
+'
+' Rules:
+'   - EVERY underscore becomes a space.
+'   - Multiple spaces collapse to one.
+'   - Final output is uppercase.
+'
+' Examples:
+'   OA_DEWPT
+'      -> OUTSIDE DEW POINT
+'
+'   ROOM_DEW_POINT
+'      -> ROOM DEW POINT
+'
+'   EF_STATUS
+'      -> EXHAUST FAN STATUS
+'============================================================
+Private Function NormalizeNameOutput( _
+    ByVal sourceText As String) As String
+
+    Dim regex As Object
+
+    'Replace every underscore with a space.
+    sourceText = Replace(sourceText, "_", " ")
 
     'Convert tabs and line breaks to spaces.
-    resultText = Replace(resultText, vbTab, " ")
-    resultText = Replace(resultText, vbCr, " ")
-    resultText = Replace(resultText, vbLf, " ")
+    sourceText = Replace(sourceText, vbTab, " ")
+    sourceText = Replace(sourceText, vbCr, " ")
+    sourceText = Replace(sourceText, vbLf, " ")
 
-    'Reduce all repeated whitespace to one space.
+    'Collapse repeated whitespace into a single space.
     Set regex = CreateObject("VBScript.RegExp")
 
     regex.Global = True
-    regex.IgnoreCase = False
     regex.Pattern = "\s+"
 
-    resultText = regex.Replace(resultText, " ")
+    sourceText = regex.Replace(sourceText, " ")
 
-    'Remove leading and trailing spaces.
-    resultText = Trim$(resultText)
+    'Trim leading/trailing spaces.
+    sourceText = Trim$(sourceText)
 
-    'Final result is always uppercase.
-    NormalizeNameOutput = UCase$(resultText)
+    'Always return uppercase.
+    NormalizeNameOutput = UCase$(sourceText)
 
 End Function
 
@@ -290,42 +429,48 @@ End Function
 '============================================================
 ' FORMAT NAME-TO-ACRONYM OUTPUT
 '
+' Rules:
+'   - Spaces between terms become underscores.
+'   - Repeated underscores are reduced to one.
+'   - Final output is uppercase.
+'
 ' Example:
-'   SAT ALM
+'   Supply Air Temperature Alarm
 '
 ' Becomes:
 '   SAT_ALM
 '============================================================
-Private Function NormalizeAcronymOutput(ByVal sourceText As String) As String
+Private Function NormalizeAcronymOutput( _
+    ByVal sourceText As String) As String
 
     Dim regex As Object
     Dim resultText As String
 
     resultText = sourceText
 
-    'Convert all whitespace runs to one underscore.
+    resultText = Replace(resultText, vbTab, " ")
+    resultText = Replace(resultText, vbCr, " ")
+    resultText = Replace(resultText, vbLf, " ")
+
     Set regex = CreateObject("VBScript.RegExp")
 
     regex.Global = True
     regex.IgnoreCase = False
-    regex.Pattern = "\s+"
 
+    regex.Pattern = "\s+"
     resultText = regex.Replace(resultText, "_")
 
-    'Reduce repeated underscores to one underscore.
     regex.Pattern = "_+"
     resultText = regex.Replace(resultText, "_")
 
-    'Remove leading and trailing underscores.
-    Do While Left$(resultText, 1) = "_"
+    Do While Len(resultText) > 0 And Left$(resultText, 1) = "_"
         resultText = Mid$(resultText, 2)
     Loop
 
-    Do While Right$(resultText, 1) = "_"
+    Do While Len(resultText) > 0 And Right$(resultText, 1) = "_"
         resultText = Left$(resultText, Len(resultText) - 1)
     Loop
 
-    'Final result is always uppercase.
     NormalizeAcronymOutput = UCase$(resultText)
 
 End Function
@@ -333,6 +478,11 @@ End Function
 
 '============================================================
 ' ADD A NEW CUSTOM NAME / ACRONYM CONVERSION
+'
+' Custom mappings must remain unique:
+'
+'   - A name cannot use two different acronyms.
+'   - An acronym cannot convert back to two different names.
 '============================================================
 Private Sub AddNewSysercoConversion()
 
@@ -343,16 +493,11 @@ Private Sub AddNewSysercoConversion()
     Dim acronym As String
 
     Dim nameToAcronym As Object
-    Dim acronymToNames As Object
-
-    Dim possibleNames As Collection
-    Dim existingNames As String
+    Dim acronymToName As Object
 
     Dim customSheet As Worksheet
     Dim nextRow As Long
-
     Dim answer As VbMsgBoxResult
-    Dim i As Long
 
     fullNameInput = Application.InputBox( _
         prompt:= _
@@ -363,7 +508,7 @@ Private Sub AddNewSysercoConversion()
 
     If UserCancelledInputBox(fullNameInput) Then Exit Sub
 
-    fullName = Trim$(CStr(fullNameInput))
+    fullName = NormalizeStoredName(CStr(fullNameInput))
 
     If Len(fullName) = 0 Then
 
@@ -377,15 +522,16 @@ Private Sub AddNewSysercoConversion()
 
     acronymInput = Application.InputBox( _
         prompt:= _
-            "Enter the ACRONYM that corresponds to:" & vbCrLf & vbCrLf & _
-            UCase$(fullName) & vbCrLf & vbCrLf & _
+            "Enter the unique ACRONYM that corresponds to:" & _
+            vbCrLf & vbCrLf & _
+            fullName & vbCrLf & vbCrLf & _
             "Example: DAT", _
         Title:="Add New Syserco Acronym", _
         Type:=2)
 
     If UserCancelledInputBox(acronymInput) Then Exit Sub
 
-    acronym = Trim$(CStr(acronymInput))
+    acronym = NormalizeStoredAcronym(CStr(acronymInput))
 
     If Len(acronym) = 0 Then
 
@@ -397,21 +543,14 @@ Private Sub AddNewSysercoConversion()
 
     End If
 
-    'Store custom names and acronyms in uppercase.
-    fullName = UCase$(fullName)
-    acronym = UCase$(acronym)
-
-    'Spaces are not stored inside an acronym.
-    acronym = NormalizeAcronymOutput(acronym)
-
     Set nameToAcronym = CreateObject("Scripting.Dictionary")
-    Set acronymToNames = CreateObject("Scripting.Dictionary")
+    Set acronymToName = CreateObject("Scripting.Dictionary")
 
     nameToAcronym.compareMode = vbTextCompare
-    acronymToNames.compareMode = vbTextCompare
+    acronymToName.compareMode = vbTextCompare
 
-    BuildSysercoMappings nameToAcronym, acronymToNames
-    LoadCustomMappings nameToAcronym, acronymToNames
+    BuildSysercoMappings nameToAcronym, acronymToName
+    LoadCustomMappings nameToAcronym, acronymToName
 
     If nameToAcronym.Exists(fullName) Then
 
@@ -429,12 +568,12 @@ Private Sub AddNewSysercoConversion()
         Else
 
             MsgBox _
-                "The NAME """ & fullName & """ already exists with the acronym:" & _
-                vbCrLf & vbCrLf & _
-                UCase$(CStr(nameToAcronym(fullName))) & vbCrLf & vbCrLf & _
-                "A name can only be assigned to one acronym.", _
+                "The name """ & fullName & _
+                """ is already assigned to:" & vbCrLf & vbCrLf & _
+                CStr(nameToAcronym(fullName)) & vbCrLf & vbCrLf & _
+                "Each name can only have one acronym.", _
                 vbExclamation, _
-                "Name Already Exists"
+                "Name Already Assigned"
 
         End If
 
@@ -442,33 +581,17 @@ Private Sub AddNewSysercoConversion()
 
     End If
 
-    If acronymToNames.Exists(acronym) Then
+    If acronymToName.Exists(acronym) Then
 
-        Set possibleNames = acronymToNames(acronym)
-
-        For i = 1 To possibleNames.Count
-
-            If Len(existingNames) > 0 Then
-                existingNames = existingNames & vbCrLf
-            End If
-
-            existingNames = existingNames & _
-                            "• " & UCase$(CStr(possibleNames(i)))
-
-        Next i
-
-        answer = MsgBox( _
+        MsgBox _
             "The acronym """ & acronym & _
             """ is already assigned to:" & vbCrLf & vbCrLf & _
-            existingNames & vbCrLf & vbCrLf & _
-            "Do you also want to assign it to:" & vbCrLf & _
-            fullName & "?" & vbCrLf & vbCrLf & _
-            "When converting this acronym to a name, the macro will ask " & _
-            "which meaning to use.", _
-            vbYesNo + vbQuestion, _
-            "Acronym Has Multiple Meanings")
+            CStr(acronymToName(acronym)) & vbCrLf & vbCrLf & _
+            "Enter a different unique acronym.", _
+            vbExclamation, _
+            "Acronym Already Assigned"
 
-        If answer <> vbYes Then Exit Sub
+        Exit Sub
 
     End If
 
@@ -483,7 +606,9 @@ Private Sub AddNewSysercoConversion()
 
     Set customSheet = GetOrCreateCustomMappingSheet()
 
-    nextRow = customSheet.Cells(customSheet.Rows.Count, 1).End(xlUp).Row + 1
+    nextRow = customSheet.Cells( _
+        customSheet.Rows.Count, _
+        1).End(xlUp).Row + 1
 
     If nextRow < 2 Then nextRow = 2
 
@@ -496,7 +621,7 @@ Private Sub AddNewSysercoConversion()
     MsgBox _
         "The new conversion was saved successfully." & vbCrLf & vbCrLf & _
         fullName & " = " & acronym & vbCrLf & vbCrLf & _
-        "It is now available for both conversion directions.", _
+        "It is now available in both conversion directions.", _
         vbInformation, _
         "Conversion Added"
 
@@ -504,7 +629,7 @@ End Sub
 
 
 '============================================================
-' GET OR CREATE THE CUSTOM CONVERSION WORKSHEET
+' GET OR CREATE CUSTOM CONVERSION WORKSHEET
 '============================================================
 Private Function GetOrCreateCustomMappingSheet() As Worksheet
 
@@ -517,7 +642,8 @@ Private Function GetOrCreateCustomMappingSheet() As Worksheet
     If ws Is Nothing Then
 
         Set ws = ThisWorkbook.Worksheets.Add( _
-            After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+            After:=ThisWorkbook.Worksheets( _
+                ThisWorkbook.Worksheets.Count))
 
         ws.Name = CUSTOM_SHEET_NAME
 
@@ -535,11 +661,14 @@ End Function
 
 
 '============================================================
-' LOAD SAVED CUSTOM CONVERSIONS
+' LOAD CUSTOM CONVERSIONS
+'
+' Conflicting saved rows are ignored so they cannot override
+' or corrupt the built-in unique mappings.
 '============================================================
 Private Sub LoadCustomMappings( _
     ByVal nameToAcronym As Object, _
-    ByVal acronymToNames As Object)
+    ByVal acronymToName As Object)
 
     Dim ws As Worksheet
     Dim lastRow As Long
@@ -560,20 +689,22 @@ Private Sub LoadCustomMappings( _
 
     For rowNumber = 2 To lastRow
 
-        fullName = Trim$(CStr(ws.Cells(rowNumber, 1).Value2))
-        acronym = Trim$(CStr(ws.Cells(rowNumber, 2).Value2))
+        fullName = NormalizeStoredName( _
+            CStr(ws.Cells(rowNumber, 1).Value2))
 
-        fullName = UCase$(fullName)
-        acronym = UCase$(acronym)
+        acronym = NormalizeStoredAcronym( _
+            CStr(ws.Cells(rowNumber, 2).Value2))
 
         If Len(fullName) > 0 And Len(acronym) > 0 Then
 
-            If Not nameToAcronym.Exists(fullName) Then
+            If Not nameToAcronym.Exists(fullName) And _
+               Not acronymToName.Exists(acronym) Then
 
-                AddMapping nameToAcronym, _
-                           acronymToNames, _
-                           fullName, _
-                           acronym
+                AddCanonicalMapping _
+                    nameToAcronym:=nameToAcronym, _
+                    acronymToName:=acronymToName, _
+                    fullName:=fullName, _
+                    acronym:=acronym
 
             End If
 
@@ -585,192 +716,82 @@ End Sub
 
 
 '============================================================
+' NORMALIZE A STORED NAME
+'============================================================
+Private Function NormalizeStoredName( _
+    ByVal sourceText As String) As String
+
+    Dim regex As Object
+    Dim resultText As String
+
+    resultText = sourceText
+
+    resultText = Replace(resultText, "_", " ")
+    resultText = Replace(resultText, vbTab, " ")
+    resultText = Replace(resultText, vbCr, " ")
+    resultText = Replace(resultText, vbLf, " ")
+
+    Set regex = CreateObject("VBScript.RegExp")
+
+    regex.Global = True
+    regex.Pattern = "\s+"
+
+    resultText = regex.Replace(resultText, " ")
+
+    NormalizeStoredName = UCase$(Trim$(resultText))
+
+End Function
+
+
+'============================================================
+' NORMALIZE A STORED ACRONYM
+'============================================================
+Private Function NormalizeStoredAcronym( _
+    ByVal sourceText As String) As String
+
+    Dim regex As Object
+    Dim resultText As String
+
+    resultText = Trim$(sourceText)
+
+    resultText = Replace(resultText, vbTab, " ")
+    resultText = Replace(resultText, vbCr, " ")
+    resultText = Replace(resultText, vbLf, " ")
+
+    Set regex = CreateObject("VBScript.RegExp")
+
+    regex.Global = True
+
+    regex.Pattern = "\s+"
+    resultText = regex.Replace(resultText, "_")
+
+    regex.Pattern = "_+"
+    resultText = regex.Replace(resultText, "_")
+
+    Do While Len(resultText) > 0 And Left$(resultText, 1) = "_"
+        resultText = Mid$(resultText, 2)
+    Loop
+
+    Do While Len(resultText) > 0 And Right$(resultText, 1) = "_"
+        resultText = Left$(resultText, Len(resultText) - 1)
+    Loop
+
+    NormalizeStoredAcronym = UCase$(resultText)
+
+End Function
+
+
+'============================================================
 ' DETERMINE WHETHER APPLICATION.INPUTBOX WAS CANCELLED
 '============================================================
-Private Function UserCancelledInputBox(ByVal inputResult As Variant) As Boolean
+Private Function UserCancelledInputBox( _
+    ByVal inputResult As Variant) As Boolean
 
     If VarType(inputResult) = vbBoolean Then
         UserCancelledInputBox = (inputResult = False)
     Else
         UserCancelledInputBox = False
     End If
-
-End Function
-
-
-'============================================================
-' CONVERT ACRONYMS TO NAMES
-'============================================================
-Private Function ConvertAcronymsInText( _
-    ByVal sourceText As String, _
-    ByVal sortedAcronyms As Variant, _
-    ByVal acronymToNames As Object, _
-    ByVal ambiguityChoices As Object) As String
-
-    Dim i As Long
-    Dim acronym As String
-    Dim replacementName As String
-    Dim possibleNames As Collection
-
-    ConvertAcronymsInText = sourceText
-
-    For i = LBound(sortedAcronyms) To UBound(sortedAcronyms)
-
-        acronym = CStr(sortedAcronyms(i))
-
-        If ContainsWholeTerm( _
-            ConvertAcronymsInText, _
-            acronym, _
-            False) Then
-
-            Set possibleNames = acronymToNames(acronym)
-
-            If possibleNames.Count = 1 Then
-
-                replacementName = CStr(possibleNames(1))
-
-            Else
-
-                replacementName = ResolveAmbiguousAcronym( _
-                    acronym, _
-                    possibleNames, _
-                    ambiguityChoices)
-
-                If Len(replacementName) = 0 Then
-                    GoTo NextAcronym
-                End If
-
-            End If
-
-            ConvertAcronymsInText = ReplaceWholeTerm( _
-                ConvertAcronymsInText, _
-                acronym, _
-                replacementName, _
-                False)
-
-        End If
-
-NextAcronym:
-    Next i
-
-End Function
-
-
-'============================================================
-' CONVERT NAMES TO ACRONYMS
-'============================================================
-Private Function ConvertNamesInText( _
-    ByVal sourceText As String, _
-    ByVal sortedNames As Variant, _
-    ByVal nameToAcronym As Object) As String
-
-    Dim i As Long
-    Dim fullName As String
-    Dim acronym As String
-
-    ConvertNamesInText = sourceText
-
-    For i = LBound(sortedNames) To UBound(sortedNames)
-
-        fullName = CStr(sortedNames(i))
-        acronym = CStr(nameToAcronym(fullName))
-
-        If ContainsWholeTerm( _
-            ConvertNamesInText, _
-            fullName, _
-            True) Then
-
-            ConvertNamesInText = ReplaceWholeTerm( _
-                ConvertNamesInText, _
-                fullName, _
-                acronym, _
-                True)
-
-        End If
-
-    Next i
-
-End Function
-
-
-'============================================================
-' HANDLE ACRONYMS WITH MULTIPLE POSSIBLE NAMES
-'============================================================
-Private Function ResolveAmbiguousAcronym( _
-    ByVal acronym As String, _
-    ByVal possibleNames As Collection, _
-    ByVal ambiguityChoices As Object) As String
-
-    Dim prompt As String
-    Dim response As Variant
-    Dim i As Long
-    Dim selectedNumber As Long
-
-    If ambiguityChoices.Exists(acronym) Then
-
-        ResolveAmbiguousAcronym = _
-            CStr(ambiguityChoices(acronym))
-
-        Exit Function
-
-    End If
-
-    prompt = "The acronym """ & UCase$(acronym) & _
-             """ has more than one possible meaning:" & vbCrLf & vbCrLf
-
-    For i = 1 To possibleNames.Count
-
-        prompt = prompt & _
-                 i & " - " & _
-                 UCase$(CStr(possibleNames(i))) & vbCrLf
-
-    Next i
-
-    prompt = prompt & vbCrLf & _
-             "Enter the number for the meaning you want to use." & vbCrLf & _
-             "The choice will be reused during this macro run." & _
-             vbCrLf & vbCrLf & _
-             "Select Cancel to leave this acronym unchanged."
-
-    Do
-        response = Application.InputBox( _
-            prompt:=prompt, _
-            Title:="Choose Meaning for " & UCase$(acronym), _
-            Type:=1)
-
-        If UserCancelledInputBox(response) Then
-
-            ResolveAmbiguousAcronym = vbNullString
-            Exit Function
-
-        End If
-
-        If IsNumeric(response) Then
-
-            selectedNumber = CLng(response)
-
-            If selectedNumber >= 1 And _
-               selectedNumber <= possibleNames.Count Then
-
-                ResolveAmbiguousAcronym = _
-                    CStr(possibleNames(selectedNumber))
-
-                ambiguityChoices.Add _
-                    acronym, _
-                    ResolveAmbiguousAcronym
-
-                Exit Function
-
-            End If
-
-        End If
-
-        MsgBox "Enter a number from 1 through " & _
-               possibleNames.Count & ".", _
-               vbExclamation, _
-               "Invalid Selection"
-
-    Loop
 
 End Function
 
@@ -793,12 +814,13 @@ Private Function ContainsWholeTerm( _
     regex.Multiline = True
 
     searchPattern = BuildSearchPattern( _
-        searchTerm, _
-        flexibleNameSeparators)
+        searchTerm:=searchTerm, _
+        flexibleNameSeparators:=flexibleNameSeparators)
 
-    regex.Pattern = "(^|[^A-Za-z0-9])(" & _
-                    searchPattern & _
-                    ")(?=$|[^A-Za-z0-9])"
+    regex.Pattern = _
+        "(^|[^A-Za-z0-9])(" & _
+        searchPattern & _
+        ")(?=$|[^A-Za-z0-9])"
 
     ContainsWholeTerm = regex.Test(sourceText)
 
@@ -824,12 +846,13 @@ Private Function ReplaceWholeTerm( _
     regex.Multiline = True
 
     searchPattern = BuildSearchPattern( _
-        searchTerm, _
-        flexibleNameSeparators)
+        searchTerm:=searchTerm, _
+        flexibleNameSeparators:=flexibleNameSeparators)
 
-    regex.Pattern = "(^|[^A-Za-z0-9])(" & _
-                    searchPattern & _
-                    ")(?=$|[^A-Za-z0-9])"
+    regex.Pattern = _
+        "(^|[^A-Za-z0-9])(" & _
+        searchPattern & _
+        ")(?=$|[^A-Za-z0-9])"
 
     ReplaceWholeTerm = regex.Replace( _
         sourceText, _
@@ -839,12 +862,17 @@ End Function
 
 
 '============================================================
-' BUILD THE REGULAR-EXPRESSION SEARCH PATTERN
+' BUILD REGULAR-EXPRESSION SEARCH PATTERN
 '
-' Full names may be separated with:
-'   spaces
-'   underscores
-'   hyphens
+' Names may be written with:
+'   - spaces
+'   - underscores
+'   - hyphens
+'
+' Example matches:
+'   SUPPLY AIR TEMPERATURE
+'   SUPPLY_AIR_TEMPERATURE
+'   SUPPLY-AIR-TEMPERATURE
 '============================================================
 Private Function BuildSearchPattern( _
     ByVal searchTerm As String, _
@@ -855,7 +883,10 @@ Private Function BuildSearchPattern( _
     escapedTerm = EscapeRegexText(searchTerm)
 
     If flexibleNameSeparators Then
-        escapedTerm = Replace(escapedTerm, " ", "[ _-]+")
+        escapedTerm = Replace( _
+            escapedTerm, _
+            " ", _
+            "[ _-]+")
     End If
 
     BuildSearchPattern = escapedTerm
@@ -864,9 +895,10 @@ End Function
 
 
 '============================================================
-' ESCAPE REGEX SPECIAL CHARACTERS
+' ESCAPE REGULAR-EXPRESSION SPECIAL CHARACTERS
 '============================================================
-Private Function EscapeRegexText(ByVal value As String) As String
+Private Function EscapeRegexText( _
+    ByVal value As String) As String
 
     Dim specialCharacters As Variant
     Dim character As Variant
@@ -890,7 +922,13 @@ End Function
 
 
 '============================================================
-' SORT DICTIONARY KEYS FROM LONGEST TO SHORTEST
+' SORT KEYS FROM LONGEST TO SHORTEST
+'
+' This prevents a shorter name such as:
+'   WATER
+'
+' from being processed before:
+'   PROCESS WATER PUMP
 '============================================================
 Private Function GetSortedDictionaryKeys( _
     ByVal dictionary As Object) As Variant
@@ -924,220 +962,245 @@ End Function
 
 
 '============================================================
-' ADD A NAME / ACRONYM PAIR TO BOTH LOOKUP TABLES
+' ADD A CANONICAL TWO-WAY MAPPING
+'
+' Example:
+'   EXHAUST FAN -> EF
+'   EF -> EXHAUST FAN
 '============================================================
-Private Sub AddMapping( _
+Private Sub AddCanonicalMapping( _
     ByVal nameToAcronym As Object, _
-    ByVal acronymToNames As Object, _
+    ByVal acronymToName As Object, _
     ByVal fullName As String, _
     ByVal acronym As String)
 
-    Dim names As Collection
+    fullName = NormalizeStoredName(fullName)
+    acronym = NormalizeStoredAcronym(acronym)
+
+    If Len(fullName) = 0 Or Len(acronym) = 0 Then Exit Sub
 
     If Not nameToAcronym.Exists(fullName) Then
         nameToAcronym.Add fullName, acronym
     End If
 
-    If acronymToNames.Exists(acronym) Then
-
-        Set names = acronymToNames(acronym)
-
-    Else
-
-        Set names = New Collection
-        acronymToNames.Add acronym, names
-
-    End If
-
-    If Not CollectionContainsText(names, fullName) Then
-        names.Add fullName
+    If Not acronymToName.Exists(acronym) Then
+        acronymToName.Add acronym, fullName
     End If
 
 End Sub
 
 
 '============================================================
-' CHECK WHETHER A COLLECTION CONTAINS TEXT
+' ADD A NAME-TO-ACRONYM ALIAS
+'
+' The alias converts to the acronym, but the acronym retains
+' its existing canonical reverse name.
+'
+' Example:
+'   RELIEF FAN -> EF
+'
+' EF still converts to:
+'   EXHAUST FAN
 '============================================================
-Private Function CollectionContainsText( _
-    ByVal items As Collection, _
-    ByVal searchText As String) As Boolean
+Private Sub AddNameAlias( _
+    ByVal nameToAcronym As Object, _
+    ByVal fullName As String, _
+    ByVal acronym As String)
 
-    Dim item As Variant
+    fullName = NormalizeStoredName(fullName)
+    acronym = NormalizeStoredAcronym(acronym)
 
-    For Each item In items
+    If Len(fullName) = 0 Or Len(acronym) = 0 Then Exit Sub
 
-        If StrComp( _
-            CStr(item), _
-            searchText, _
-            vbTextCompare) = 0 Then
+    If Not nameToAcronym.Exists(fullName) Then
+        nameToAcronym.Add fullName, acronym
+    End If
 
-            CollectionContainsText = True
-            Exit Function
-
-        End If
-
-    Next item
-
-End Function
+End Sub
 
 
 '============================================================
 ' BUILT-IN SYSERCO NAME / ACRONYM LOOKUP TABLE
+'
+' Characteristics incorporated:
+'
+'   BOILER = BLR
+'   BUILDING = BLDG
+'   RETURN FAN = RF
+'   EXHAUST FAN = EF
+'   RELIEF FAN -> EF alias
+'   PRIMARY = PRMRY
+'   PUMP = PMP
+'   WATER = WTR
+'   WATER FLOW = WTR_FLOW
+'
+' No standalone conversion for:
+'
+'   PROCESS
+'   SECONDARY
+'   STATION
+'   SUPPLY
+'   ROOM
+'   SPACE
+'   ZONE
+'   WATER USED
+'
+' Canonical wording:
+'
+'   OUTSIDE DEW POINT
+'   ROOM DEW POINT
+'   ROOM DIFFERENTIAL PRESSURE
+'   OUTSIDE AIR RELATIVE HUMIDITY
+'   OUTSIDE AIR WET BULB TEMPERATURE
 '============================================================
 Private Sub BuildSysercoMappings( _
     ByVal nameToAcronym As Object, _
-    ByVal acronymToNames As Object)
+    ByVal acronymToName As Object)
 
-    AddMapping nameToAcronym, acronymToNames, "Actuator", "ACTR"
-    AddMapping nameToAcronym, acronymToNames, "Airflow", "AF"
-    AddMapping nameToAcronym, acronymToNames, "Airflow Measuring Station", "AFMS"
-    AddMapping nameToAcronym, acronymToNames, "Alarm", "ALM"
-    AddMapping nameToAcronym, acronymToNames, "Bias", "BIAS"
-    AddMapping nameToAcronym, acronymToNames, "Boiler", "BLR"
-    AddMapping nameToAcronym, acronymToNames, "Building", "BLDG"
-    AddMapping nameToAcronym, acronymToNames, "Building Differential Pressure", "BDP"
-    AddMapping nameToAcronym, acronymToNames, "Bypass", "BYP"
-    AddMapping nameToAcronym, acronymToNames, "Chilled Water", "CHW"
-    AddMapping nameToAcronym, acronymToNames, "Chilled Water Pump", "CHWP"
-    AddMapping nameToAcronym, acronymToNames, "Chiller", "CH"
-    AddMapping nameToAcronym, acronymToNames, "CO2", "CO2"
-    AddMapping nameToAcronym, acronymToNames, "Cold Aisle", "CA"
-    AddMapping nameToAcronym, acronymToNames, "Cold Aisle Differential Pressure", "CADP"
-    AddMapping nameToAcronym, acronymToNames, "Cold Aisle Temperature", "CAT"
-    AddMapping nameToAcronym, acronymToNames, "Command", "CMD"
-    AddMapping nameToAcronym, acronymToNames, "Condenser Water", "CW"
-    AddMapping nameToAcronym, acronymToNames, "Condenser Water Pump", "CWP"
-    AddMapping nameToAcronym, acronymToNames, "Cooling", "CLG"
-    AddMapping nameToAcronym, acronymToNames, "Cooling Tower", "CT"
-    AddMapping nameToAcronym, acronymToNames, "Cooling Tower Pump", "CTP"
-    AddMapping nameToAcronym, acronymToNames, "Close", "CLOSE"
-    AddMapping nameToAcronym, acronymToNames, "Current", "CURR"
-    AddMapping nameToAcronym, acronymToNames, "Damper", "DMPR"
-    AddMapping nameToAcronym, acronymToNames, "Detector", "DET"
-    AddMapping nameToAcronym, acronymToNames, "Dew Point", "DEWPT"
-    AddMapping nameToAcronym, acronymToNames, "Dew Point Outside", "OA_DEWPT"
-    AddMapping nameToAcronym, acronymToNames, "Dew Point Room", "RM_DEWPT"
-    AddMapping nameToAcronym, acronymToNames, "Differential Pressure", "DP"
-    AddMapping nameToAcronym, acronymToNames, "Differential Pressure Building", "B_DP"
-    AddMapping nameToAcronym, acronymToNames, "Differential Pressure Room", "RM_DP"
-    AddMapping nameToAcronym, acronymToNames, "Disable", "DISA"
-    AddMapping nameToAcronym, acronymToNames, "Domestic Hot Water", "DHW"
-    AddMapping nameToAcronym, acronymToNames, "Door Contact", "DOOR"
-    AddMapping nameToAcronym, acronymToNames, "Economizer", "ECON"
-    AddMapping nameToAcronym, acronymToNames, "Enable", "ENA"
-    AddMapping nameToAcronym, acronymToNames, "Energy", "KWH"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Actuator", "ACTR"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Airflow", "AF"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Airflow Measuring Station", "AFMS"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Alarm", "ALM"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Bias", "BIAS"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Boiler", "BLR"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Building", "BLDG"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Building Differential Pressure", "BDP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Bypass", "BYP"
 
-    AddMapping nameToAcronym, acronymToNames, "Enthalpy", "ENTH"
-    AddMapping nameToAcronym, acronymToNames, "Exhaust", "EXH"
-    AddMapping nameToAcronym, acronymToNames, "Exhaust Fan", "EF"
-    AddMapping nameToAcronym, acronymToNames, "Fan", "F"
-    AddMapping nameToAcronym, acronymToNames, "Fault", "FLT"
-    AddMapping nameToAcronym, acronymToNames, "Feedback", "FDBK"
-    AddMapping nameToAcronym, acronymToNames, "Filter", "FLTR"
-    AddMapping nameToAcronym, acronymToNames, "Final", "FINAL"
-    AddMapping nameToAcronym, acronymToNames, "Flow", "FLOW"
-    AddMapping nameToAcronym, acronymToNames, "Gallons", "GAL"
-    AddMapping nameToAcronym, acronymToNames, "Gallons Per Minute", "GPM"
-    AddMapping nameToAcronym, acronymToNames, "Heating", "HTG"
-    AddMapping nameToAcronym, acronymToNames, "Heating Hot Water", "HHW"
-    AddMapping nameToAcronym, acronymToNames, "Hot Water Pump", "HWP"
-    AddMapping nameToAcronym, acronymToNames, "High", "HI"
-    AddMapping nameToAcronym, acronymToNames, "Hot Aisle", "HA"
-    AddMapping nameToAcronym, acronymToNames, "Hot Aisle Differential Pressure", "HADP"
-    AddMapping nameToAcronym, acronymToNames, "Hot Aisle Temperature", "HAT"
-    AddMapping nameToAcronym, acronymToNames, "Humidity", "H"
-    AddMapping nameToAcronym, acronymToNames, "Industrial", "I"
-    AddMapping nameToAcronym, acronymToNames, "Industrial Water", "IW"
-    AddMapping nameToAcronym, acronymToNames, "Industrial Water Pump", "IWP"
-    AddMapping nameToAcronym, acronymToNames, "Isolation", "ISO"
-    AddMapping nameToAcronym, acronymToNames, "Leak", "LEAK"
-    AddMapping nameToAcronym, acronymToNames, "Limit", "LIM"
-    AddMapping nameToAcronym, acronymToNames, "Low", "LO"
-    AddMapping nameToAcronym, acronymToNames, "Maximum", "MAX"
-    AddMapping nameToAcronym, acronymToNames, "Measuring", "M"
-    AddMapping nameToAcronym, acronymToNames, "Metric", "METRIC"
-    AddMapping nameToAcronym, acronymToNames, "Minimum", "MIN"
-    AddMapping nameToAcronym, acronymToNames, "Mixed Air Temperature", "MAT"
-    AddMapping nameToAcronym, acronymToNames, "Mode", "MODE"
-    AddMapping nameToAcronym, acronymToNames, "Occupancy Sensor", "OCC_SENSOR"
-    AddMapping nameToAcronym, acronymToNames, "Occupied", "OCC"
-    AddMapping nameToAcronym, acronymToNames, "Offset", "OFFSET"
-    AddMapping nameToAcronym, acronymToNames, "Optimum", "OPT"
-    AddMapping nameToAcronym, acronymToNames, "Outside Air", "OA"
-    AddMapping nameToAcronym, acronymToNames, "Outside Air Relative Humidity", "OA_RH"
-    AddMapping nameToAcronym, acronymToNames, "Outside Air Temperature", "OAT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Chilled Water", "CHW"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Chilled Water Pump", "CHWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Chiller", "CH"
+    AddCanonicalMapping nameToAcronym, acronymToName, "CO2", "CO2"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Cold Aisle", "CA"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Cold Aisle Differential Pressure", "CADP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Cold Aisle Temperature", "CAT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Command", "CMD"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Condenser Water", "CW"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Condenser Water Pump", "CWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Cooling", "CLG"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Cooling Tower", "CT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Cooling Tower Pump", "CTP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Close", "CLOSE"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Current", "CURR"
 
-    AddMapping nameToAcronym, acronymToNames, "Outside Dew Point", "OA_DEWPT"
-    AddMapping nameToAcronym, acronymToNames, "Outside Wet Bulb Temp", "OA_WB"
-    AddMapping nameToAcronym, acronymToNames, "Open", "OPEN"
-    AddMapping nameToAcronym, acronymToNames, "Override", "OVRD"
-    AddMapping nameToAcronym, acronymToNames, "Position", "POS"
-    AddMapping nameToAcronym, acronymToNames, "Power", "KW"
-    AddMapping nameToAcronym, acronymToNames, "Pre", "PRE"
-    AddMapping nameToAcronym, acronymToNames, "Pressure Switch", "PS"
-    AddMapping nameToAcronym, acronymToNames, "Primary", "PRMRY"
-    AddMapping nameToAcronym, acronymToNames, "Primary Chilled Water Pump", "PCHWP"
-    AddMapping nameToAcronym, acronymToNames, "Primary Chilled Water Return Temp", "PCHWRT"
-    AddMapping nameToAcronym, acronymToNames, "Primary Chilled Water Supply Temp", "PCHWST"
-    AddMapping nameToAcronym, acronymToNames, "Primary Heating Water Pump", "PHWP"
-    AddMapping nameToAcronym, acronymToNames, "Primary Heating Water Return Temp", "PHWRT"
-    AddMapping nameToAcronym, acronymToNames, "Primary Heating Water Supply Temp", "PHWST"
-    AddMapping nameToAcronym, acronymToNames, "Process", "P"
-    AddMapping nameToAcronym, acronymToNames, "Process Water", "PW"
-    AddMapping nameToAcronym, acronymToNames, "Process Water Pump", "PWP"
-    AddMapping nameToAcronym, acronymToNames, "Pump", "PMP"
-    AddMapping nameToAcronym, acronymToNames, "Recirculation", "RECIR"
-    AddMapping nameToAcronym, acronymToNames, "Relative Humidity", "RH"
-    AddMapping nameToAcronym, acronymToNames, "Relative Humidity Outside", "OA_RH"
-    AddMapping nameToAcronym, acronymToNames, "Relay", "RLY"
-    AddMapping nameToAcronym, acronymToNames, "Relief Fan", "RF"
-    AddMapping nameToAcronym, acronymToNames, "Request", "REQ"
-    AddMapping nameToAcronym, acronymToNames, "Reset", "RESET"
-    AddMapping nameToAcronym, acronymToNames, "Return", "R"
-    AddMapping nameToAcronym, acronymToNames, "Return Air Temperature", "RAT"
-    AddMapping nameToAcronym, acronymToNames, "Return Fan", "RF"
-    AddMapping nameToAcronym, acronymToNames, "Reverse", "REV"
-    AddMapping nameToAcronym, acronymToNames, "Room", "ZONE"
-    AddMapping nameToAcronym, acronymToNames, "Room Dew Point", "RM_DEWPT"
-    AddMapping nameToAcronym, acronymToNames, "Room Differential Pressure", "RM_DP"
-    AddMapping nameToAcronym, acronymToNames, "Room Humidity", "RM_RH"
-    AddMapping nameToAcronym, acronymToNames, "Room Temperature", "RMT"
-    AddMapping nameToAcronym, acronymToNames, "Runtime", "RUNTIME"
-    AddMapping nameToAcronym, acronymToNames, "Schedule", "SCHD"
-    AddMapping nameToAcronym, acronymToNames, "Secondary", "S"
-    AddMapping nameToAcronym, acronymToNames, "Secondary Chilled Water Pump", "SCHWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Damper", "DMPR"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Detector", "DET"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Dew Point", "DEWPT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Outside Dew Point", "OA_DEWPT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Room Dew Point", "RM_DEWPT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Differential Pressure", "DP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Differential Pressure Building", "B_DP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Room Differential Pressure", "RM_DP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Disable", "DISA"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Domestic Hot Water", "DHW"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Door Contact", "DOOR"
 
-    AddMapping nameToAcronym, acronymToNames, "Secondary Chilled Water Return Temp", "SCHWRT"
-    AddMapping nameToAcronym, acronymToNames, "Secondary Chilled Water Supply Temp", "SCHWST"
-    AddMapping nameToAcronym, acronymToNames, "Secondary Heating Water Pump", "SHWP"
-    AddMapping nameToAcronym, acronymToNames, "Secondary Heating Water Return Temp", "SHWRT"
-    AddMapping nameToAcronym, acronymToNames, "Secondary Heating Water Supply Temp", "SHWST"
-    AddMapping nameToAcronym, acronymToNames, "Secondary Hot Water Pump", "SHWP"
-    AddMapping nameToAcronym, acronymToNames, "Set Point", "SP"
-    AddMapping nameToAcronym, acronymToNames, "Smoke", "SMOKE"
-    AddMapping nameToAcronym, acronymToNames, "Space", "ZONE"
-    AddMapping nameToAcronym, acronymToNames, "Speed", "SPD"
-    AddMapping nameToAcronym, acronymToNames, "Standard", "STD"
-    AddMapping nameToAcronym, acronymToNames, "Start", "STRT"
-    AddMapping nameToAcronym, acronymToNames, "Start/Stop Command", "SS"
-    AddMapping nameToAcronym, acronymToNames, "Station", "S"
-    AddMapping nameToAcronym, acronymToNames, "Status", "STS"
-    AddMapping nameToAcronym, acronymToNames, "Supply", "S"
-    AddMapping nameToAcronym, acronymToNames, "Supply Air Temperature", "SAT"
-    AddMapping nameToAcronym, acronymToNames, "Supply Fan", "SF"
-    AddMapping nameToAcronym, acronymToNames, "Switch", "SW"
-    AddMapping nameToAcronym, acronymToNames, "Temperature", "T"
-    AddMapping nameToAcronym, acronymToNames, "Unoccupied", "UNOCC"
-    AddMapping nameToAcronym, acronymToNames, "Valve", "VLV"
-    AddMapping nameToAcronym, acronymToNames, "Vibration", "VIBRATION"
-    AddMapping nameToAcronym, acronymToNames, "Voltage", "VOLTS"
-    AddMapping nameToAcronym, acronymToNames, "Water", "WTR"
-    AddMapping nameToAcronym, acronymToNames, "Water Flow", "GPM"
-    AddMapping nameToAcronym, acronymToNames, "Water Used", "GAL"
-    AddMapping nameToAcronym, acronymToNames, "Wet Bulb Outside Temp", "OA_WB"
-    AddMapping nameToAcronym, acronymToNames, "Window Contact", "WINDOW"
-    AddMapping nameToAcronym, acronymToNames, "Zone", "ZONE"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Economizer", "ECON"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Enable", "ENA"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Energy", "KWH"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Enthalpy", "ENTH"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Exhaust", "EXH"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Exhaust Fan", "EF"
+    AddNameAlias nameToAcronym, "Relief Fan", "EF"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Fault", "FLT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Feedback", "FDBK"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Filter", "FLTR"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Final", "FINAL"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Flow", "FLOW"
+
+    AddCanonicalMapping nameToAcronym, acronymToName, "Gallons", "GAL"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Gallons Per Minute", "GPM"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Heating", "HTG"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Heating Hot Water", "HHW"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Hot Water Pump", "HWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "High", "HI"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Hot Aisle", "HA"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Hot Aisle Differential Pressure", "HADP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Hot Aisle Temperature", "HAT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Humidity", "H"
+
+    AddCanonicalMapping nameToAcronym, acronymToName, "Industrial", "I"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Industrial Water", "IW"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Industrial Water Pump", "IWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Isolation", "ISO"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Leak", "LEAK"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Limit", "LIM"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Low", "LO"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Maximum", "MAX"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Measuring", "M"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Metric", "METRIC"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Minimum", "MIN"
+
+    AddCanonicalMapping nameToAcronym, acronymToName, "Mixed Air Temperature", "MAT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Mode", "MODE"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Occupancy Sensor", "OCC_SENSOR"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Occupied", "OCC"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Offset", "OFFSET"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Optimum", "OPT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Outside Air", "OA"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Outside Air Relative Humidity", "OA_RH"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Outside Air Temperature", "OAT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Outside Air Wet Bulb Temperature", "OA_WB"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Open", "OPEN"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Override", "OVRD"
+
+    AddCanonicalMapping nameToAcronym, acronymToName, "Position", "POS"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Power", "KW"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Pre", "PRE"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Pressure Switch", "PS"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Primary", "PRMRY"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Primary Chilled Water Pump", "PCHWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Primary Chilled Water Return Temp", "PCHWRT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Primary Chilled Water Supply Temp", "PCHWST"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Primary Heating Water Pump", "PHWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Primary Heating Water Return Temp", "PHWRT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Primary Heating Water Supply Temp", "PHWST"
+
+    AddCanonicalMapping nameToAcronym, acronymToName, "Process Water", "PW"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Process Water Pump", "PWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Pump", "PMP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Recirculation", "RECIR"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Relative Humidity", "RH"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Relay", "RLY"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Request", "REQ"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Reset", "RESET"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Return", "R"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Return Air Temperature", "RAT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Return Fan", "RF"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Reverse", "REV"
+
+    AddCanonicalMapping nameToAcronym, acronymToName, "Room Humidity", "RM_RH"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Room Temperature", "RMT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Runtime", "RUNTIME"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Schedule", "SCHD"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Secondary Chilled Water Pump", "SCHWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Secondary Chilled Water Return Temp", "SCHWRT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Secondary Chilled Water Supply Temp", "SCHWST"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Secondary Hot Water Pump", "SHWP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Secondary Heating Water Return Temp", "SHWRT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Secondary Heating Water Supply Temp", "SHWST"
+
+    AddCanonicalMapping nameToAcronym, acronymToName, "Set Point", "SP"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Smoke", "SMOKE"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Speed", "SPD"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Standard", "STD"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Start", "STRT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Start/Stop Command", "SS"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Status", "STS"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Supply Air Temperature", "SAT"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Supply Fan", "SF"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Switch", "SW"
+
+    AddCanonicalMapping nameToAcronym, acronymToName, "Temperature", "T"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Unoccupied", "UNOCC"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Valve", "VLV"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Vibration", "VIBRATION"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Voltage", "VOLTS"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Water", "WTR"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Water Flow", "WTR_FLOW"
+    AddCanonicalMapping nameToAcronym, acronymToName, "Window Contact", "WINDOW"
 
 End Sub
+
+
 
